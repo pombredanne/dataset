@@ -3,6 +3,7 @@ import argparse
 
 from sqlalchemy.exc import ProgrammingError
 from dataset.util import FreezeException
+from dataset.persistence.table import Table
 from dataset.persistence.database import Database
 from dataset.freeze.config import Configuration, Export
 from dataset.freeze.format import get_serializer
@@ -20,7 +21,8 @@ parser.add_argument('--db', default=None,
 
 
 def freeze(result, format='csv', filename='freeze.csv',
-           prefix='.', meta={}, indent=2, mode='list', wrap=True, **kw):
+           prefix='.', meta={}, indent=2, mode='list',
+           wrap=True, callback=None, **kw):
     """
     Perform a data export of a given result set. This is a very
     flexible exporter, allowing for various output formats, metadata
@@ -31,6 +33,9 @@ def freeze(result, format='csv', filename='freeze.csv',
 
         result = db['person'].all()
         dataset.freeze(result, format='json', filename='all-persons.json')
+        
+    If ``result`` is a table (rather than a result set), all records in
+    the table are exported (as if ``result.all()`` had been called).
 
 
     freeze supports two values for ``mode``:
@@ -54,7 +59,8 @@ def freeze(result, format='csv', filename='freeze.csv',
 
         *json*
             A JSON file containing a list of dictionaries for each row
-            in the table.
+            in the table. If a ``callback`` is given, JSON with padding 
+            (JSONP) will be generated.
 
         *tabson*
             Tabson is a smart combination of the space-efficiency of the
@@ -67,10 +73,12 @@ def freeze(result, format='csv', filename='freeze.csv',
         'prefix': prefix,
         'meta': meta,
         'indent': indent,
+        'callback': callback,
         'mode': mode,
         'wrap': wrap
     })
-    return freeze_export(Export({}, kw), result=result)
+    records = result.all() if isinstance(result, Table) else result
+    return freeze_export(Export({}, kw), result=records)
 
 
 def freeze_export(export, result=None):
@@ -88,6 +96,9 @@ def freeze_export(export, result=None):
 
 
 def main():
+    # Set up default logger.
+    logging.basicConfig(level=logging.INFO)
+
     try:
         args = parser.parse_args()
         config = Configuration(args.config)
