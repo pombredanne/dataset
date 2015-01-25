@@ -1,6 +1,8 @@
 import json
 import yaml
 
+from six import text_type, PY3
+
 from dataset.util import FreezeException
 
 
@@ -28,14 +30,17 @@ class Configuration(object):
         extension = file_name.rsplit('.', 1)[-1]
         loader = DECODER.get(extension, json)
         try:
-            fh = open(file_name, 'rb')
+            if loader == json and PY3:  # pragma: no cover
+                fh = open(file_name, encoding='utf8')
+            else:
+                fh = open(file_name, 'rb')
             try:
                 self.data = loader.load(fh)
-            except ValueError, ve:
+            except ValueError as ve:
                 raise FreezeException("Invalid freeze file: %s" % ve)
             fh.close()
-        except IOError, ioe:
-            raise FreezeException(unicode(ioe))
+        except IOError as ioe:
+            raise FreezeException(text_type(ioe))
 
     @property
     def exports(self):
@@ -58,8 +63,8 @@ class Export(object):
 
     def get_normalized(self, name, default=None):
         value = self.get(name, default=default)
-        if not value in [None, default]:
-            value = unicode(value).lower().strip()
+        if value not in [None, default]:
+            value = text_type(value).lower().strip()
         return value
 
     def get_bool(self, name, default=False):
@@ -77,8 +82,7 @@ class Export(object):
     @property
     def skip(self):
         return self.get_bool('skip')
-    
+
     @property
     def name(self):
         return self.get('name', self.get('query'))
-

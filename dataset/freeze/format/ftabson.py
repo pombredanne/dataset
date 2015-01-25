@@ -7,7 +7,7 @@ class TabsonSerializer(JSONSerializer):
         fields = []
         data = []
         if len(result):
-            keys = result[0].keys()
+            keys = list(result[0].keys())
             fields = [{'id': k} for k in keys]
             for row in result:
                 d = [row.get(k) for k in keys]
@@ -21,4 +21,3 @@ class TabsonSerializer(JSONSerializer):
         if meta is not None:
             result['meta'] = meta
         return result
-

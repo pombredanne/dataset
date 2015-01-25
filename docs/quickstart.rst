@@ -41,18 +41,18 @@ To store some data you need to get a reference to a table. You don't need
 to worry about whether the table already exists or not, since dataset
 will create it automatically::
 
-   # get a reference to the table 'person'
-   table = db['person']
+   # get a reference to the table 'user'
+   table = db['user']
 
 Now storing data in a table is a matter of a single function call. Just
 pass a `dict`_ to *insert*. Note that you don't need to create the columns
 *name* and *age* – dataset will do this automatically::
 
    # Insert a new record.
-   table.insert(dict(name='John Doe', age=46))
+   table.insert(dict(name='John Doe', age=46, country='China'))
 
    # dataset will create "missing" columns any time you insert a dict with an unknown key
-   table.insert(dict(name='Jane Doe', age=37, gender='female'))
+   table.insert(dict(name='Jane Doe', age=37, country='France', gender='female'))
 
 .. _dict: http://docs.python.org/2/library/stdtypes.html#dict
 
@@ -64,6 +64,39 @@ The list of filter columns given as the second argument filter using the
 values in the first column. If you don't want to update over a
 particular value, just use the auto-generated ``id`` column.
 
+Using Transactions
+------------------
+
+You can group a set of database updates in a transaction. In that case, all updates
+are committed at once or, in case of exception, all of them are reverted. Transactions
+are supported through a context manager, so they can be used through a ``with``
+statement::
+
+    with dataset.connect() as tx:
+        tx['user'].insert(dict(name='John Doe', age=46, country='China'))
+
+You can get same functionality by invoking the methods :py:meth:`begin() <dataset.Table.begin>`,
+:py:meth:`commit() <dataset.Table.commit>` and :py:meth:`rollback() <dataset.Table.rollback>`
+explicitly::
+
+    db = dataset.connect()
+    db.begin()
+    try:
+        db['user'].insert(dict(name='John Doe', age=46, country='China'))
+        db.commit()
+    except:
+        db.rollback()
+
+Nested transactions are supported too::
+
+    db = dataset.connect()
+    with db as tx1:
+        tx1['user'].insert(dict(name='John Doe', age=46, country='China'))
+        with db as tx2:
+            tx2['user'].insert(dict(name='Jane Doe', age=37, country='France', gender='female'))
+
+
+
 Inspecting databases and tables
 -------------------------------
 
@@ -71,18 +104,18 @@ When dealing with unknown databases we might want to check their structure
 first. To start exploring, let's find out what tables are stored in the
 database:
 
-   >>> print db.tables
-   set([u'user', u'action'])
+   >>> print(db.tables)
+   [u'user']
 
 Now, let's list all columns available in the table ``user``:
 
-   >>> print db['user'].columns
-   set([u'id', u'name', u'email', u'pwd', u'country'])
+   >>> print(db['user'].columns)
+   [u'id', u'country', u'age', u'name', u'gender'] 
 
 Using ``len()`` we can get the total number of rows in a table:
 
-   >>> print len(db['user'])
-   187
+   >>> print(len(db['user']))
+   2
 
 Reading data from tables
 ------------------------
@@ -94,13 +127,13 @@ Now let's get some real data out of the table::
 If we simply want to iterate over all rows in a table, we can omit :py:meth:`all() <dataset.Table.all>`::
 
    for user in db['user']:
-      print user['email']
+      print(user['age'])
 
 We can search for specific entries using :py:meth:`find() <dataset.Table.find>` and
 :py:meth:`find_one() <dataset.Table.find_one>`::
 
    # All users from China
-   users = table.find(country='China')
+   chinese_users = table.find(country='China')
 
    # Get a specific user
    john = table.find_one(name='John Doe')
@@ -120,14 +153,14 @@ use the full power of SQL queries. Here's how you run them with ``dataset``::
 
    result = db.query('SELECT country, COUNT(*) c FROM user GROUP BY country')
    for row in result:
-      print row['country'], row['c']
+      print(row['country'], row['c'])
 
 The :py:meth:`query() <dataset.Table.query>` method can also be used to 
-access the underlying `SQLAlchemy core API <http://docs.sqlalchemy.org/ru/latest/orm/query.html#the-query-object>`_, which allows for the
+access the underlying `SQLAlchemy core API <http://docs.sqlalchemy.org/en/latest/orm/query.html#the-query-object>`_, which allows for the
 programmatic construction of more complex queries::
 
-   table = db['users'].table
-   statement = table.select(table.c.name.like('%Snoopy%'))
+   table = db['user'].table
+   statement = table.select(table.c.name.like('%John%'))
    result = db.query(statement) 
 
 
@@ -142,12 +175,12 @@ such using the :py:meth:`freeze() <dataset.freeze>` function::
 
    # export all users into a single JSON
    result = db['users'].all()
-   dataset.freeze(result, 'users.json', format='json')
+   dataset.freeze(result, format='json', filename='users.json')
 
 You can create one file per row by setting ``mode`` to "item"::
 
    # export one JSON file per user
-   dataset.freeze(result, 'users/{{ id }}.json', format='json', mode='item')
+   dataset.freeze(result, format='json', filename='users/{{ id }}.json', mode='item')
 
 Since this is a common operation we made it available via command line
 utility ``datafreeze``. Read more about the :doc:`freezefile markup <freezefile>`.
