@@ -119,13 +119,21 @@ class DatabaseTestCase(unittest.TestCase):
 
     def test_with(self):
         init_length = len(self.db['weather'])
-        try:
+        with self.assertRaises(ValueError):
             with self.db as tx:
                 tx['weather'].insert({'date': datetime(2011, 1, 1), 'temperature': 1, 'place': u'tmp_place'})
-                tx['weather'].insert({'date': True, 'temperature': 'wrong_value', 'place': u'tmp_place'})
-        except SQLAlchemyError:
-            pass
+                raise ValueError()
         assert len(self.db['weather']) == init_length
+
+    def test_invalid_values(self):
+        if 'mysql.connector' in self.db.engine.dialect.dbapi.__name__:
+            # WARNING: mysql-connector seems to be doing some weird type casting upon insert.
+            # The mysql-python driver is not affected but it isn't compatible with Python 3
+            # Conclusion: use postgresql.
+            return
+        with self.assertRaises(SQLAlchemyError):
+            tbl = self.db['weather']
+            tbl.insert({'date': True, 'temperature': 'wrong_value', 'place': u'tmp_place'})
 
     def test_load_table(self):
         tbl = self.db.load_table('weather')
@@ -162,6 +170,31 @@ class TableTestCase(unittest.TestCase):
         assert len(self.tbl) == len(TEST_DATA) + 1, len(self.tbl)
         assert self.tbl.find_one(id=last_id)['place'] == 'Berlin'
 
+    def test_insert_ignore(self):
+        self.tbl.insert_ignore({
+            'date': datetime(2011, 1, 2),
+            'temperature': -10,
+            'place': 'Berlin'},
+            ['place']
+        )
+        assert len(self.tbl) == len(TEST_DATA) + 1, len(self.tbl)
+        self.tbl.insert_ignore({
+            'date': datetime(2011, 1, 2),
+            'temperature': -10,
+            'place': 'Berlin'},
+            ['place']
+        )
+        assert len(self.tbl) == len(TEST_DATA) + 1, len(self.tbl)
+
+    def test_insert_ignore_all_key(self):
+        for i in range(0, 2):
+            self.tbl.insert_ignore({
+                'date': datetime(2011, 1, 2),
+                'temperature': -10,
+                'place': 'Berlin'},
+                ['date', 'temperature', 'place']
+            )
+
     def test_upsert(self):
         self.tbl.upsert({
             'date': datetime(2011, 1, 2),
@@ -186,6 +219,31 @@ class TableTestCase(unittest.TestCase):
                 'place': 'Berlin'},
                 ['date', 'temperature', 'place']
             )
+
+    def test_update_while_iter(self):
+        for row in self.tbl:
+            row['foo'] = 'bar'
+            self.tbl.update(row, ['place', 'date'])
+
+    def test_weird_column_names(self):
+        with self.assertRaises(ValueError):
+            self.tbl.insert({
+                'date': datetime(2011, 1, 2),
+                'temperature': -10,
+                'foo.bar': 'Berlin',
+                'qux.bar': 'Huhu'
+            })
+
+    def test_invalid_column_names(self):
+        tbl = self.db['weather']
+        with self.assertRaises(ValueError):
+            tbl.insert({None: 'banana'})
+
+        with self.assertRaises(ValueError):
+            tbl.insert({'': 'banana'})
+
+        with self.assertRaises(ValueError):
+            tbl.insert({'-': 'banana'})
 
     def test_delete(self):
         self.tbl.insert({
@@ -216,6 +274,11 @@ class TableTestCase(unittest.TestCase):
         d = self.tbl.find_one(place='Atlantis')
         assert d is None, d
 
+    def test_count(self):
+        assert len(self.tbl) == 6, len(self.tbl)
+        l = self.tbl.count(place=TEST_CITY_1)
+        assert l == 3, l
+
     def test_find(self):
         ds = list(self.tbl.find(place=TEST_CITY_1))
         assert len(ds) == 3, ds
@@ -229,6 +292,8 @@ class TableTestCase(unittest.TestCase):
         assert ds[0]['temperature'] == -1, ds
         ds = list(self.tbl.find(order_by=['-temperature']))
         assert ds[0]['temperature'] == 8, ds
+        ds = list(self.tbl.find(self.tbl.table.columns.temperature > 4))
+        assert len(ds) == 3, ds
 
     def test_offset(self):
         ds = list(self.tbl.find(place=TEST_CITY_1, _offset=1))
@@ -241,6 +306,18 @@ class TableTestCase(unittest.TestCase):
         assert len(x) == 2, x
         x = list(self.tbl.distinct('place', 'date'))
         assert len(x) == 6, x
+        x = list(self.tbl.distinct(
+            'place', 'date',
+            self.tbl.table.columns.date >= datetime(2011, 1, 2, 0, 0)))
+        assert len(x) == 4, x
+
+    def test_get_items(self):
+        x = list(self.tbl['place'])
+        y = list(self.tbl.distinct('place'))
+        assert x == y, (x, y)
+        x = list(self.tbl['place', 'date'])
+        y = list(self.tbl.distinct('place', 'date'))
+        assert x == y, (x, y)
 
     def test_insert_many(self):
         data = TEST_DATA * 100
@@ -258,10 +335,22 @@ class TableTestCase(unittest.TestCase):
         else:
             assert False, 'we should not reach else block, no exception raised!'
 
+    def test_table_drop(self):
+        assert 'weather' in self.db
+        self.db['weather'].drop()
+        assert 'weather' not in self.db
+
     def test_columns(self):
         cols = self.tbl.columns
         assert len(list(cols)) == 4, 'column count mismatch'
         assert 'date' in cols and 'temperature' in cols and 'place' in cols
+
+    def test_drop_column(self):
+        try:
+            self.tbl.drop_column('date')
+            assert 'date' not in self.tbl.columns
+        except NotImplementedError:
+            pass
 
     def test_iter(self):
         c = 0
@@ -299,3 +388,66 @@ class TableTestCase(unittest.TestCase):
         m = self.tbl.find(place='not in data')
         l = list(m)  # exhaust iterator
         assert len(l) == 0
+
+
+class Constructor(dict):
+    """ Very simple low-functionality extension to ``dict`` to
+    provide attribute access to dictionary contents"""
+    def __getattr__(self, name):
+        return self[name]
+
+
+class RowTypeTestCase(unittest.TestCase):
+
+    def setUp(self):
+        self.db = connect('sqlite:///:memory:', row_type=Constructor)
+        self.tbl = self.db['weather']
+        for row in TEST_DATA:
+            self.tbl.insert(row)
+
+    def tearDown(self):
+        for table in self.db.tables:
+            self.db[table].drop()
+
+    def test_find_one(self):
+        self.tbl.insert({
+            'date': datetime(2011, 1, 2),
+            'temperature': -10,
+            'place': 'Berlin'}
+        )
+        d = self.tbl.find_one(place='Berlin')
+        assert d['temperature'] == -10, d
+        assert d.temperature == -10, d
+        d = self.tbl.find_one(place='Atlantis')
+        assert d is None, d
+
+    def test_find(self):
+        ds = list(self.tbl.find(place=TEST_CITY_1))
+        assert len(ds) == 3, ds
+        for item in ds:
+            assert isinstance(item, Constructor), item
+        ds = list(self.tbl.find(place=TEST_CITY_1, _limit=2))
+        assert len(ds) == 2, ds
+        for item in ds:
+            assert isinstance(item, Constructor), item
+
+    def test_distinct(self):
+        x = list(self.tbl.distinct('place'))
+        assert len(x) == 2, x
+        for item in x:
+            assert isinstance(item, Constructor), item
+        x = list(self.tbl.distinct('place', 'date'))
+        assert len(x) == 6, x
+        for item in x:
+            assert isinstance(item, Constructor), item
+
+    def test_iter(self):
+        c = 0
+        for row in self.tbl:
+            c += 1
+            assert isinstance(row, Constructor), row
+        assert c == len(self.tbl)
+
+
+if __name__ == '__main__':
+    unittest.main()

@@ -1,8 +1,16 @@
 *.pyc
 *.egg-info
+*.egg
 dist/*
 build/*
 .DS_Store
 .watchr
+.coverage
+htmlcov/
 
 *.pyo
+env3/*
+env/*
+Test.yaml
+Freezefile.yaml
+:memory:
